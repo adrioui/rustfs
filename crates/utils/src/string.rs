@@ -467,20 +467,64 @@ pub fn parse_ellipses_range(pattern: &str) -> Result<Vec<String>> {
         return Err(Error::other("Invalid argument"));
     }
 
-    // TODO: Add support for hexadecimals.
-    let start = ellipses_range[0].parse::<usize>().map_err(Error::other)?;
-    let end = ellipses_range[1].parse::<usize>().map_err(Error::other)?;
+    // Check if both values use hexadecimal format (0x or 0X prefix)
+    let start_hex = ellipses_range[0].starts_with("0x") || ellipses_range[0].starts_with("0X");
+    let end_hex = ellipses_range[1].starts_with("0x") || ellipses_range[1].starts_with("0X");
+
+    // Ensure consistent format: both hex or both decimal
+    if start_hex != end_hex {
+        return Err(Error::other(
+            "Invalid argument: start and end must use the same format (both hex or both decimal)",
+        ));
+    }
+
+    let (start, end) = if start_hex {
+        // Parse hexadecimal values (strip 0x/0X prefix)
+        let start_val = usize::from_str_radix(&ellipses_range[0][2..], 16).map_err(Error::other)?;
+        let end_val = usize::from_str_radix(&ellipses_range[1][2..], 16).map_err(Error::other)?;
+        (start_val, end_val)
+    } else {
+        // Parse decimal values (existing behavior)
+        let start_val = ellipses_range[0].parse::<usize>().map_err(Error::other)?;
+        let end_val = ellipses_range[1].parse::<usize>().map_err(Error::other)?;
+        (start_val, end_val)
+    };
 
     if start > end {
-        return Err(Error::other("Invalid argument:range start cannot be bigger than end"));
+        return Err(Error::other("Invalid argument: range start cannot be bigger than end"));
     }
 
     let mut ret: Vec<String> = Vec::with_capacity(end - start + 1);
-    for i in start..=end {
-        if ellipses_range[0].starts_with('0') && ellipses_range[0].len() > 1 {
-            ret.push(format!("{:0width$}", i, width = ellipses_range[1].len()));
-        } else {
-            ret.push(format!("{i}"));
+
+    if start_hex {
+        // Determine prefix case and padding width from input
+        let prefix = if ellipses_range[0].starts_with("0X") { "0X" } else { "0x" };
+        let use_uppercase = ellipses_range[0].chars().skip(2).any(|c| c.is_ascii_uppercase());
+        // Calculate padding width from the end value (excluding "0x" prefix)
+        let hex_width = ellipses_range[1].len() - 2;
+        let needs_padding = ellipses_range[0].len() > 3 && ellipses_range[0].chars().nth(2) == Some('0');
+
+        for i in start..=end {
+            if needs_padding {
+                if use_uppercase {
+                    ret.push(format!("{}{:0width$X}", prefix, i, width = hex_width));
+                } else {
+                    ret.push(format!("{}{:0width$x}", prefix, i, width = hex_width));
+                }
+            } else if use_uppercase {
+                ret.push(format!("{}{:X}", prefix, i));
+            } else {
+                ret.push(format!("{}{:x}", prefix, i));
+            }
+        }
+    } else {
+        // Existing decimal formatting logic
+        for i in start..=end {
+            if ellipses_range[0].starts_with('0') && ellipses_range[0].len() > 1 {
+                ret.push(format!("{:0width$}", i, width = ellipses_range[1].len()));
+            } else {
+                ret.push(format!("{i}"));
+            }
         }
     }
 
@@ -760,91 +804,16 @@ mod tests {
                     vec!["5 ", "70"],
                 ],
             },
+            // Mixed format should fail
             TestCase {
-                num: 20,
-                pattern: "{01...036}",
-                success: true,
-                want: vec![
-                    vec!["001"],
-                    vec!["002"],
-                    vec!["003"],
-                    vec!["004"],
-                    vec!["005"],
-                    vec!["006"],
-                    vec!["007"],
-                    vec!["008"],
-                    vec!["009"],
-                    vec!["010"],
-                    vec!["011"],
-                    vec!["012"],
-                    vec!["013"],
-                    vec!["014"],
-                    vec!["015"],
-                    vec!["016"],
-                    vec!["017"],
-                    vec!["018"],
-                    vec!["019"],
-                    vec!["020"],
-                    vec!["021"],
-                    vec!["022"],
-                    vec!["023"],
-                    vec!["024"],
-                    vec!["025"],
-                    vec!["026"],
-                    vec!["027"],
-                    vec!["028"],
-                    vec!["029"],
-                    vec!["030"],
-                    vec!["031"],
-                    vec!["032"],
-                    vec!["033"],
-                    vec!["034"],
-                    vec!["035"],
-                    vec!["036"],
-                ],
+                num: 26,
+                pattern: "{1...0x10}",
+                ..Default::default()
             },
             TestCase {
-                num: 21,
-                pattern: "{001...036}",
-                success: true,
-                want: vec![
-                    vec!["001"],
-                    vec!["002"],
-                    vec!["003"],
-                    vec!["004"],
-                    vec!["005"],
-                    vec!["006"],
-                    vec!["007"],
-                    vec!["008"],
-                    vec!["009"],
-                    vec!["010"],
-                    vec!["011"],
-                    vec!["012"],
-                    vec!["013"],
-                    vec!["014"],
-                    vec!["015"],
-                    vec!["016"],
-                    vec!["017"],
-                    vec!["018"],
-                    vec!["019"],
-                    vec!["020"],
-                    vec!["021"],
-                    vec!["022"],
-                    vec!["023"],
-                    vec!["024"],
-                    vec!["025"],
-                    vec!["026"],
-                    vec!["027"],
-                    vec!["028"],
-                    vec!["029"],
-                    vec!["030"],
-                    vec!["031"],
-                    vec!["032"],
-                    vec!["033"],
-                    vec!["034"],
-                    vec!["035"],
-                    vec!["036"],
-                ],
+                num: 27,
+                pattern: "{0x1...10}",
+                ..Default::default()
             },
         ];
 
@@ -870,5 +839,37 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn test_parse_ellipses_range_hex() {
+        // Test basic hex range
+        let result = parse_ellipses_range("{0x1...0x5}").unwrap();
+        assert_eq!(result, vec!["0x1", "0x2", "0x3", "0x4", "0x5"]);
+
+        // Test hex with letters
+        let result = parse_ellipses_range("{0xa...0xf}").unwrap();
+        assert_eq!(result, vec!["0xa", "0xb", "0xc", "0xd", "0xe", "0xf"]);
+
+        // Test padded hex
+        let result = parse_ellipses_range("{0x01...0x0f}").unwrap();
+        assert_eq!(
+            result,
+            vec![
+                "0x01", "0x02", "0x03", "0x04", "0x05", "0x06", "0x07", "0x08", "0x09", "0x0a", "0x0b", "0x0c", "0x0d", "0x0e",
+                "0x0f"
+            ]
+        );
+
+        // Test uppercase hex
+        let result = parse_ellipses_range("{0XA...0XF}").unwrap();
+        assert_eq!(result, vec!["0XA", "0XB", "0XC", "0XD", "0XE", "0XF"]);
+
+        // Test mixed format fails
+        assert!(parse_ellipses_range("{1...0x10}").is_err());
+        assert!(parse_ellipses_range("{0x1...10}").is_err());
+
+        // Test invalid hex fails
+        assert!(parse_ellipses_range("{0xg...0xz}").is_err());
     }
 }
